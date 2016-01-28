@@ -128,6 +128,43 @@ inline void find_allele_pl(int denovo, int n_allele, int ploidy, int **_allele_p
     return;
 }
 
+inline void count_allele_indivs(bcf_hdr_t *hdr, bcf1_t *line, int **_alleles, int *_max_alleles)
+{
+    int *alleles = *_alleles, max_alleles = *_max_alleles, tmp_allele, i, last_allele;
+    bcf_fmt_t *gt_ptr = bcf_get_fmt(hdr, line, "GT");
+    uint8_t *gt = gt_ptr->p, *gt_end;
+    for (i = 0; i < line->n_sample; i++) {
+        gt_end = gt + gt_ptr->size;
+        last_allele = -1;
+        while(gt < gt_end) {
+            tmp_allele = fmt_to_int(&gt, gt_ptr->type);
+            if (bcf_gt_is_missing(tmp_allele)) continue;
+            tmp_allele = bcf_gt_allele(tmp_allele);
+            if (tmp_allele != last_allele) {
+                if (tmp_allele >= max_alleles) {
+                    int *tmp;
+                    max_alleles = tmp_alleles;
+                    kroundup32(max_alleles);
+                    max_alleles = max_alleles < 32? 32 : max_alleles << 1;
+                    if ((tmp = (int*)realloc(alleles, sizeof(int) * max_alleles))) {
+                        alleles = tmp;
+                    } else {
+                        free(alleles);
+                        alleles = 0;
+                        return;
+                    }
+                }
+                alleles[tmp_allele]++;
+                last_allele = tmp_allele;
+            }
+        }
+    }
+
+    *_alleles = alleles;
+    *_max_alleles = max_alleles;
+    return;
+}
+
 int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, kstring_t *fam_ids, int min_dp, int min_alt, int par_pl_pen, int prb_pl_pen)
 {
     int i, j, res, n, max = 0, *offsets = 0, int_id, n_denovo = 0, ploidy, *allele_pl = 0, max_pl = 0;
@@ -258,7 +295,7 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
         if (denovo >= 0) {
             fprintf(stderr, "Found de novo allele %d\n", denovo);
             ++n_denovo;
-            dnv_vals[i] = denovo + 1;
+            dnv_vals[i] = denovo + 1; // 0 is not de novo
         }
     }
     free(allele_pl);
@@ -270,7 +307,8 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
 int main(int argc, char *argv[])
 {
     int c, min_dp = 20, min_alt = 3, par_pl_pen = 20, prb_pl_pen = 20, help = 0, compression = 7, i, res, *dnv_vals = 0, found_dnv, n_samples;
-    uint32_t max_other = 0;
+    int *alleles = 0, max_alleles = 0;
+    uint32_t max_indiv = 2;
     char *fnin = 0, *fnout = 0, *fndenovo = 0, *fnped = 0;
     char out_mode = 'v';
     kstring_t fam_ids = {0, 0, 0};
@@ -290,7 +328,7 @@ int main(int argc, char *argv[])
         else if (c == 'o') fnout = strdup(optarg);
         else if (c == 'd') fndenovo = strdup(optarg);
         else if (c == 'O') out_mode = optarg[0];
-        else if (c == 'n') max_other = atoi(optarg);
+        else if (c == 'n') max_indiv = atoi(optarg);
         else if (c == 'h') help = 1;
         else break;
     }
@@ -310,7 +348,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "           -o FILE         The output file [stdout]\n");
         fprintf(stderr, "           -d FILE         Output abbreviated information on the identified de novo variants (recommended for large inputs)\n");
         fprintf(stderr, "           -O <v|z|b|u>    v: VCF, z: bgzip compressed VCF, b: BCF, u: uncompressed BCF [v]\n");
-        fprintf(stderr, "           -n INT          The maximum number of non-sibling individuals with the allele for a de novo call [%d]\n", max_other);
+        fprintf(stderr, "           -n INT          The maximum number of non-sibling individuals with the allele for a de novo call [%d]\n", max_indiv);
         fprintf(stderr, "           -h              Print this help information\n");
         fprintf(stderr, "\n");
         return -1;
@@ -352,6 +390,8 @@ int main(int argc, char *argv[])
         }
         fprintf(stderr, "\n");
         fprintf(stderr, "finding denovo\n");
+
+        /* Find putative de novo variants */
         found_dnv = find_denovo(hdr, line, dnv_vals, h, &fam_ids, min_dp, min_alt, par_pl_pen, prb_pl_pen);
         if (!found_dnv) {
             continue;
@@ -361,6 +401,29 @@ int main(int argc, char *argv[])
             if (dnv_vals[i]) fprintf(stderr, "%d,", i);
         }
         fprintf(stderr, "\n");
+
+        /* Remove multi-sample variants */
+        if (found_dnv && max_indiv < line->n_sample) {
+            count_allele_indivs(hdr, line, &alleles, &max_alleles);
+            for (i = 0; i < n_samples; ++i) {
+                if (dnv_vals[i]) {
+                    if (alleles[dnv_vals[i] - 1] > max_indiv) { 
+                        dnv_vals[i] = 0;
+                        found_dnv--;
+                    }
+                }
+            }
+        }
+
+        /* Write summary information */
+        
+
+        /* Add de novo information to the format field */
+        if (found_dnv) {
+            i=0;
+        }
+        
+        /* Write to the output VCF */
     }
 
     /*

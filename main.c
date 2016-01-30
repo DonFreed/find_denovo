@@ -34,9 +34,7 @@ khash_t(ped) *read_ped_file(const char *fnped, kstring_t *fam_ids)
             line.s[offsets[3] - 1] = '\t';
             idx = fam_ids->l;
             res = kputsn(line.s + offsets[2], offsets[4] - offsets[2], fam_ids);
-            //fprintf(stderr, "Adding %s to the hash table with key %u\n", line.s + offsets[1], kh_str_hash_func(line.s + offsets[1]));
             k = kh_put(ped, h, strdup(line.s + offsets[1]), &ret); // FIXME: strdup is less efficent than the allocation of a memory block
-            //if (ret == -1) fprintf(stderr, "Put failed\n");
             kh_value(h, k) = idx;
         }
         line.l = 0;
@@ -131,70 +129,6 @@ inline void find_allele_pl2(int allele, int n_allele, int ploidy, int **_allele_
     return;
 }
 
-/*
-inline void find_allele_pl(int denovo, int n_allele, int ploidy, int **_allele_pl, int *max_pl)
-{
-    int *gt, idx = ploidy - 1, pos = 0, sum = 0, i = 0, j = 0, allele_found, *allele_pl = *_allele_pl, n_out = 0;
-    gt = calloc(ploidy, sizeof(int));
-    n_allele += 1; // Ensure array encompasses end + 1
-    while (sum <= ploidy * (n_allele - 1)) {
-        allele_found = 0;
-        for (i = 0; i < ploidy; ++i) {
-            if (gt[0] == denovo) allele_found = 1;
-        }
-        if (allele_found) {
-            if (n_out >= *max_pl) {
-                int *tmp;
-                *max_pl = *max_pl? *max_pl<<1 : 2;
-                if ((tmp = (int*)realloc(allele_pl, sizeof(int) * *max_pl))) {
-                    allele_pl = tmp;
-                } else {
-                    free(allele_pl);
-                    allele_pl = 0;
-                    return;
-                }
-            }
-            allele_pl[n_out++] = pos;
-        }
-
-        if (idx == 0) {
-            while (1) {
-                if (idx + 1 >= ploidy) {
-                    int tmp = gt[idx] + 1;
-                    memset(gt, 0, ploidy * sizeof(int));
-                    gt[idx] = tmp;
-                    idx -= 1;
-                    pos += 1;
-                    break;
-                }
-                if (gt[idx + 1] > gt[idx]) {
-                    gt[idx] += 1;
-                    for (j = 0; j < idx; ++j) gt[j] = 0;
-                    idx = idx? idx - 1: 0;
-                    pos += 1;
-                    break;
-                }
-                idx += 1;
-            }
-        } else {
-            gt[idx] += 1;
-            idx -= 1;
-            pos += 1;
-        }
-        sum = 0;
-        for (i = 0; i < ploidy; ++i) sum += gt[i];
-    }
-    *_allele_pl = allele_pl;
-    return;
-}
-*/
-
-/*
-            allele[0] = fmt_to_int(&gt[0], gt_ptr->type);
-            //if (bcf_gt_is_missing(allele[0])) break; // missing = 0
-            allele[0] = bcf_gt_allele(allele[0]);
-*/
-
 inline void count_allele_indivs(bcf_hdr_t *hdr, bcf1_t *line, int **_alleles, int *_max_alleles)
 {
     int *alleles = *_alleles, max_alleles = *_max_alleles, tmp_allele, i, last_allele;
@@ -246,7 +180,6 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
     for (i = 0; i < bcf_hdr_nsamples(hdr); ++i) {
         int last_allele = -1, allele[3] = {-1, -1, -1}, denovo = -1, depth[3] = {0, 0, 0}, pass_filt = 1;
         k = kh_get(ped, h, bcf_hdr_int2id(hdr, BCF_DT_SAMPLE, i));
-//        fprintf(stderr, "individual %d or %s\n", i, bcf_hdr_int2id(hdr, BCF_DT_SAMPLE, i));
         if ((k == kh_end(h))) {
             continue;
         }
@@ -267,7 +200,6 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
         assert(n == 2);
         for (j = 1; j < 3; ++j) {
             int_id = bcf_hdr_id2int(hdr, BCF_DT_SAMPLE, s.s + offsets[j - 1]);
-//            fprintf(stderr, "parent %d column %d\n", j - 1, int_id);
             gt[j] = gt_ptr->p + (int_id * gt_ptr->size);
             gt_end[j] = gt[j] + gt_ptr->size;
             ad[j] = ad_ptr->p + (int_id * ad_ptr->size);
@@ -277,12 +209,9 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
         }
 
         /* Check genotypes */
-//        fprintf(stderr, "Child's alleles: ");
         while (gt[0] < gt_end[0]) {
             allele[0] = fmt_to_int(&gt[0], gt_ptr->type);
-            //if (bcf_gt_is_missing(allele[0])) break; // missing = 0
             allele[0] = bcf_gt_allele(allele[0]);
-//            fprintf(stderr, "%d,", allele[0]);
             if (allele[0] == last_allele) continue;
             for (j = 1; j < 3; ++j) {
                 while (allele[0] > allele[j] && gt[j] < gt_end[j]) {
@@ -294,17 +223,12 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
             }
             last_allele = allele[0];
         }
-//        fprintf(stderr, "\n");
         if (denovo < 0) continue;
 
-        fprintf(stderr, "individual %s, column %i has denovo allele\n", bcf_hdr_int2id(hdr, BCF_DT_SAMPLE, i), i);
-
         /* Check depths */
-//        fprintf(stderr, "Child depths: ");
         j = 0;
         while (ad[0] < ad_end[0]) {
             int tmp_ad = fmt_to_int(&ad[0], ad_ptr->type);
-//            fprintf(stderr, "%d,", tmp_ad);
             /* Check alt depth */
             if (j == denovo) {
                 if (tmp_ad < min_alt) { pass_filt = 0; }
@@ -312,8 +236,8 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
             depth[0] += tmp_ad;
             ++j;
         }
-//        fprintf(stderr, "\n");
-        if (!pass_filt) { fprintf(stderr, "Removed due to child alt depth\n"); continue; }
+        if (!pass_filt) { continue; }
+
         /* Check total depth */
         for (j = 1; j < 3; ++j) {
             while (ad[j] < ad_end[j]) {
@@ -323,16 +247,13 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
         for (j = 0; j < 3; ++j) {
             if (depth[j] < min_dp) pass_filt = 0;
         }
-        if (!pass_filt) { fprintf(stderr, "Continue due to family depth %d, %d, %d\n", depth[0], depth[1], depth[2]); continue; }
+        if (!pass_filt) { continue; }
 
         /* Check proband PL tags */
-        fprintf(stderr, "Calling find allele with %d, %d, %d\n", denovo, line->n_allele, ploidy);
         find_allele_pl2(denovo, line->n_allele, ploidy, &allele_pl, &max_pl);
-        fprintf(stderr, "Child PL tags: ");
         pl_idx = 0; dnv_idx = 0; min_pl = 100000;
         while (pl[0] < pl_end[0]) {
             int tmp_pl = fmt_to_int(&pl[0], pl_ptr->type);
-            fprintf(stderr, "%d,", tmp_pl);
             if (pl_idx == allele_pl[dnv_idx]) {
                 pl_idx++;
                 dnv_idx++;
@@ -341,35 +262,27 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
             min_pl = tmp_pl < min_pl? tmp_pl : min_pl;
             pl_idx++;
         }
-        fprintf(stderr, "\n");
         if (min_pl < prb_pl_pen) { 
-            fprintf(stderr, "Continue due to child min pl %d\n", min_pl); 
-            for (j = 0; j < max_pl - 1; ++j) { fprintf(stderr, "%d,", allele_pl[j]); }
-            fprintf(stderr, "\n");
             continue; 
         }
 
         /* Check parental PL tags */
         for (j = 1; j < 3; ++j) {
             pl_idx = 0; dnv_idx = 0; min_pl = 100000;
-            fprintf(stderr, "Parent %d PL tags: ", j);
             while (pl[j] < pl_end[j]) {
                 int tmp_pl = fmt_to_int(&pl[j], pl_ptr->type);
-                fprintf(stderr, "%d,", tmp_pl);
                 if (pl_idx == allele_pl[dnv_idx]) {
                     min_pl = tmp_pl < min_pl? tmp_pl : min_pl;
                     dnv_idx++;
                 }
                 pl_idx++;
             }
-            fprintf(stderr, "\n");
-            if (min_pl < par_pl_pen) { fprintf(stderr, "min_pl %d < par_pl pen %d\n", min_pl, par_pl_pen); pass_filt = 0; }
+            if (min_pl < par_pl_pen) { pass_filt = 0; }
         }
-        if (!pass_filt) { fprintf(stderr, "Continue due to parental min pl\n"); continue; }
+        if (!pass_filt) { continue; }
 
         /* Found a de novo variant */
         if (denovo >= 0) {
-//            fprintf(stderr, "Found de novo allele %d\n", denovo);
             ++n_denovo;
             dnv_vals[i] = denovo + 1; // 0 is not de novo
         }
@@ -382,7 +295,7 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
 
 int main(int argc, char *argv[])
 {
-    int c, min_dp = 20, min_alt = 3, par_pl_pen = 20, prb_pl_pen = 20, help = 0, compression = 7, i, j, res, *dnv_vals = 0, found_dnv, n_samples;
+    int c, min_dp = 20, min_alt = 3, par_pl_pen = 20, prb_pl_pen = 20, help = 0, compression = 7, i, j, *dnv_vals = 0, found_dnv, n_samples;
     int *alleles = 0, max_alleles = 0;
     uint32_t max_indiv = 2;
     char *fnin = 0, *fnout = 0, *fndenovo = 0, *fnped = 0;
@@ -465,7 +378,6 @@ int main(int argc, char *argv[])
     }
     line = bcf_init();
     while ((bcf_read(fin, hdr, line) != -1)) {
-        fprintf(stderr, "Reading line chr%" PRId32 ":%" PRId32 "\n", line->rid, line->pos);
 
         /* Check filter */
         bcf_unpack(line, BCF_UN_FLT);
@@ -483,26 +395,15 @@ int main(int argc, char *argv[])
         if (!found_dnv) {
             continue;
         }
-        fprintf(stderr, "Found %d de novo variants at chromsome %" PRId32 ":%" PRId32 " in samples: ", found_dnv, line->rid, line->pos);
-        for (i = 0; i < n_samples; ++i) {
-            if (dnv_vals[i]) fprintf(stderr, "%d,", i);
-        }
-        fprintf(stderr, "\n");
 
         /* Remove multi-sample variants */
         if (max_alleles) memset(alleles, 0, sizeof(int) * (max_alleles - 1));
         if (found_dnv && max_indiv < line->n_sample) {
             count_allele_indivs(hdr, line, &alleles, &max_alleles);
-            fprintf(stderr, "Found individuals with alleles: ");
-            for (i = 0; i < max_alleles; ++i) {
-                fprintf(stderr, "%d,", alleles[i]);
-            }
-            fprintf(stderr, "\n");
 
             for (i = 0; i < n_samples; ++i) {
                 if (dnv_vals[i]) {
                     if (alleles[dnv_vals[i] - 1] > max_indiv) { 
-                        fprintf(stderr, "Removing de novo in column %d as %d alleles were found\n", i, alleles[dnv_vals[i] - 1]);
                         dnv_vals[i] = 0;
                         found_dnv--;
                     }
@@ -519,6 +420,7 @@ int main(int argc, char *argv[])
             /* Write summary information */
             // Chrom, pos, ref, alt, info, fmt, sampleid, -, sample field
             if (fdenovo) {
+                alt_out.l = 0;
                 for (i = 1; i < line->n_allele; ++i) {
                     if (alt_out.l) kputsn(",", 1, &alt_out);
                     kputs(line->d.allele[i], &alt_out);
@@ -537,7 +439,11 @@ int main(int argc, char *argv[])
                             p = vals;
                             for (j = 0; j < res; ++j) {
                                 uint32_t tmp = *((uint32_t *)p);
-                                if (!j) fprintf(fdenovo, ",");
+                                if (j) {
+                                    fprintf(fdenovo, ",");
+                                } else {
+                                    fprintf(fdenovo, "=");
+                                }
                                 fprintf(fdenovo, "%" PRId32, tmp);
                                 p += 4;
                             }
@@ -547,8 +453,12 @@ int main(int argc, char *argv[])
                             p = vals;
                             for (j = 0; j < res; ++j) {
                                 float tmp = *((float *)p);
-                                if (!j) fprintf(fdenovo, ",");
-                                fprintf(fdenovo, "%f", tmp);
+                                if (j) {
+                                    fprintf(fdenovo, ",");
+                                } else {
+                                    fprintf(fdenovo, "=");
+                                }
+                                fprintf(fdenovo, "%.3f", tmp);
                                 p += sizeof(float);
                             }
                             break;
@@ -597,6 +507,7 @@ int main(int argc, char *argv[])
                         }
                     }
                 }
+                fprintf(fdenovo, "\n");
             }
             free(vals);
         }
@@ -605,43 +516,6 @@ int main(int argc, char *argv[])
         bcf_write(fout, hdr, line);
     }
 
-    /*
-    // Test the ped file //
-    {
-        const char *test[5];
-        int is_missing;
-        test[0] = "11000.p1";
-        test[1] = "11007.p1";
-        test[2] = "11007.s1";
-        test[3] = "11008.fa";
-        test[4] = "14698.s1";
-        for (i = 0; i < 5; ++i) {
-            k = kh_get(ped, h, test[i]);
-            fprintf(stderr, "Key %s\n", kh_exist(h, k)? "exists" : "does not exist");
-            if ((is_missing = (k == kh_end(h)))) {
-                fprintf(stderr, "Key %s not found in hash table with key %u\n", test[i], kh_str_hash_func(test[i]));
-            } else {
-                res = kh_value(h, k);
-                fprintf(stderr, "Key %s found with value %d corresponding to %s\n", test[i], res, fam_ids.s + res);
-            }
-        }
-    }
-    */
-
-    /*
-    // Print parameters //
-    printf("min_dp - %d\n", min_dp);
-    printf("min_alt - %d\n", min_alt);
-    printf("denovo_penalty - %d\n", denovo_penalty);
-    printf("compression - %d\n", compression);
-    if (fnin) { printf("fnin - %s\n", fnin); }
-    if (fnout) { printf("fnout - %s\n", fnout); }
-    if (fndenovo) { printf("fndenovo - %s\n", fndenovo); }
-    if (out_mode) { printf("out_mode - %c\n", out_mode); }
-    if (fnped) { printf("fnped - %s\n", fnped); }
-    */
-//    for (k = kh_begin(h); k != kh_end(h); ++k)
-//        if (kh_exist(h, k)) free(&kh_key(h, k));
     bcf_close(fin);
     bcf_close(fout);
     bcf_destroy(line);

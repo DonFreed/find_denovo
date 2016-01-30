@@ -35,7 +35,7 @@ khash_t(ped) *read_ped_file(const char *fnped, kstring_t *fam_ids)
             idx = fam_ids->l;
             res = kputsn(line.s + offsets[2], offsets[4] - offsets[2], fam_ids);
             //fprintf(stderr, "Adding %s to the hash table with key %u\n", line.s + offsets[1], kh_str_hash_func(line.s + offsets[1]));
-            k = kh_put(ped, h, strdup(line.s + offsets[1]), &ret); // FIXME: strdup is less efficent than the allocation of a memory block; no free
+            k = kh_put(ped, h, strdup(line.s + offsets[1]), &ret); // FIXME: strdup is less efficent than the allocation of a memory block
             //if (ret == -1) fprintf(stderr, "Put failed\n");
             kh_value(h, k) = idx;
         }
@@ -124,8 +124,10 @@ inline void find_allele_pl2(int allele, int n_allele, int ploidy, int **_allele_
             unwind_stk(stk, &idx);
         }
     }
+    allele_pl[out_idx] = -1;
     *_allele_pl = allele_pl;
     *_max_pl = max_pl;
+    free(stk);
     return;
 }
 
@@ -226,7 +228,6 @@ inline void count_allele_indivs(bcf_hdr_t *hdr, bcf1_t *line, int **_alleles, in
             }
         }
     }
-
     *_alleles = alleles;
     *_max_alleles = max_alleles;
     return;
@@ -641,7 +642,24 @@ int main(int argc, char *argv[])
     */
 //    for (k = kh_begin(h); k != kh_end(h); ++k)
 //        if (kh_exist(h, k)) free(&kh_key(h, k));
+    bcf_close(fin);
+    bcf_close(fout);
+    bcf_destroy(line);
+    bcf_hdr_destroy(hdr);
+    // Sub-optimal
+    for (k = kh_begin(h); k != kh_end(h); ++k) {
+        if (kh_exist(h, k)) {
+            free((char*)kh_key(h, k));
+        }
+    }
     free(fam_ids.s);
+    free(fnin);
+    free(fnout);
+    free(fndenovo);
+    free(fnped);
+    free(alt_out.s);
+    free(alleles);
+    free(dnv_vals);
     kh_destroy(ped, h);
     return 0;
 }

@@ -53,8 +53,8 @@ inline int fmt_to_int(uint8_t **_fmt, int type)
     int i, ret=0;
     switch (type) {
         case BCF_BT_INT8: ret = (int)*(fmt++); break;
-        case BCF_BT_INT16: for (i = 0; i < 2; ++i) ret = (ret << 8) | (int)*(fmt++); break;
-        case BCF_BT_INT32: for (i = 0; i < 4; ++i) ret = (ret << 8) | (int)*(fmt++); break;
+        case BCF_BT_INT16: for (i = 0; i < 2; ++i) ret |= ((int)*(fmt++) << (8 * i)); break;
+        case BCF_BT_INT32: for (i = 0; i < 4; ++i) ret |= ((int)*(fmt++) << (8 * i)); break;
         default: fprintf(stderr, "Error: unknown fmt type %d\n", type); abort(); break;
     }
     *_fmt = fmt;
@@ -71,6 +71,65 @@ inline int find_ploidy(int size, int type)
     }
 }
 
+inline int n_pl(n_allele, ploidy)
+{
+    float res = 1.0;
+    int i;
+    for (i = 0; i < ploidy; ++i) {
+        res *= ((float)(n_allele + i)) / (i + 1);
+    }
+    return (int)(res + 0.9999);
+}
+
+inline void unwind_stk(int *stk, int *idx)
+{
+    for (; *idx > 0; --(*idx)) {
+        if (stk[*idx] < stk[*idx - 1]) {
+            stk[*idx]++;
+            return;
+        } else {
+            stk[*idx] = 0;
+        }
+    }
+    *idx = 0;
+    stk[0]++;
+    return;
+}
+
+inline void find_allele_pl2(int allele, int n_allele, int ploidy, int **_allele_pl, int *_max_pl)
+{
+    int *stk, pl_pos = 0, idx = 0, i, out_idx = 0, *allele_pl = *_allele_pl, max_pl = *_max_pl;
+    stk = calloc(ploidy, sizeof(int));
+    while (stk[0] < n_allele) {
+        if (stk[idx] == allele) {
+            for (i = 0; i < n_pl(stk[idx] + 1, ploidy - idx - 1); ++i) {
+                if (out_idx >= max_pl) {
+                    int *tmp;
+                    max_pl = max_pl? max_pl << 1 : 32;
+                    if ((tmp = (int*)realloc(allele_pl, sizeof(int) * max_pl))) {
+                        allele_pl = tmp;
+                    } else {
+                        free(allele_pl);
+                        allele_pl = 0;
+                        return;
+                    }
+                }
+                allele_pl[out_idx++] = pl_pos++;
+            }
+            unwind_stk(stk, &idx);
+        } else if (idx + 1 < ploidy) {
+            stk[++idx] = 0;
+        } else {
+            pl_pos++;
+            unwind_stk(stk, &idx);
+        }
+    }
+    *_allele_pl = allele_pl;
+    *_max_pl = max_pl;
+    return;
+}
+
+/*
 inline void find_allele_pl(int denovo, int n_allele, int ploidy, int **_allele_pl, int *max_pl)
 {
     int *gt, idx = ploidy - 1, pos = 0, sum = 0, i = 0, j = 0, allele_found, *allele_pl = *_allele_pl, n_out = 0;
@@ -126,6 +185,13 @@ inline void find_allele_pl(int denovo, int n_allele, int ploidy, int **_allele_p
     *_allele_pl = allele_pl;
     return;
 }
+*/
+
+/*
+            allele[0] = fmt_to_int(&gt[0], gt_ptr->type);
+            //if (bcf_gt_is_missing(allele[0])) break; // missing = 0
+            allele[0] = bcf_gt_allele(allele[0]);
+*/
 
 inline void count_allele_indivs(bcf_hdr_t *hdr, bcf1_t *line, int **_alleles, int *_max_alleles)
 {
@@ -139,11 +205,10 @@ inline void count_allele_indivs(bcf_hdr_t *hdr, bcf1_t *line, int **_alleles, in
         /* Write summary information */
 
             tmp_allele = fmt_to_int(&gt, gt_ptr->type);
-            if (bcf_gt_is_missing(tmp_allele)) continue;
             tmp_allele = bcf_gt_allele(tmp_allele);
             if (tmp_allele != last_allele) {
                 if (tmp_allele >= max_alleles) {
-                    int *tmp;
+                    int *tmp, old = max_alleles;
                     max_alleles = tmp_allele;
                     kroundup32(max_alleles);
                     max_alleles = max_alleles < 32? 32 : max_alleles << 1;
@@ -154,6 +219,7 @@ inline void count_allele_indivs(bcf_hdr_t *hdr, bcf1_t *line, int **_alleles, in
                         alleles = 0;
                         return;
                     }
+                    memset(alleles + old, 0, sizeof(int) * (max_alleles - old));
                 }
                 alleles[tmp_allele]++;
                 last_allele = tmp_allele;
@@ -210,11 +276,12 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
         }
 
         /* Check genotypes */
+//        fprintf(stderr, "Child's alleles: ");
         while (gt[0] < gt_end[0]) {
             allele[0] = fmt_to_int(&gt[0], gt_ptr->type);
-            if (bcf_gt_is_missing(allele[0])) break;
+            //if (bcf_gt_is_missing(allele[0])) break; // missing = 0
             allele[0] = bcf_gt_allele(allele[0]);
-//            fprintf(stderr, "Current allele %d\n", allele[0]);
+//            fprintf(stderr, "%d,", allele[0]);
             if (allele[0] == last_allele) continue;
             for (j = 1; j < 3; ++j) {
                 while (allele[0] > allele[j] && gt[j] < gt_end[j]) {
@@ -226,7 +293,10 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
             }
             last_allele = allele[0];
         }
+//        fprintf(stderr, "\n");
         if (denovo < 0) continue;
+
+        fprintf(stderr, "individual %s, column %i has denovo allele\n", bcf_hdr_int2id(hdr, BCF_DT_SAMPLE, i), i);
 
         /* Check depths */
 //        fprintf(stderr, "Child depths: ");
@@ -242,7 +312,7 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
             ++j;
         }
 //        fprintf(stderr, "\n");
-        if (!pass_filt) continue;
+        if (!pass_filt) { fprintf(stderr, "Removed due to child alt depth\n"); continue; }
         /* Check total depth */
         for (j = 1; j < 3; ++j) {
             while (ad[j] < ad_end[j]) {
@@ -252,15 +322,16 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
         for (j = 0; j < 3; ++j) {
             if (depth[j] < min_dp) pass_filt = 0;
         }
-//        if (!pass_filt) { fprintf(stderr, "Continue due to family depth %d, %d, %d\n", depth[0], depth[1], depth[2]); continue; }
+        if (!pass_filt) { fprintf(stderr, "Continue due to family depth %d, %d, %d\n", depth[0], depth[1], depth[2]); continue; }
 
         /* Check proband PL tags */
-        find_allele_pl(denovo, line->n_allele, ploidy, &allele_pl, &max_pl);
-//        fprintf(stderr, "Child PL tags: ");
+        fprintf(stderr, "Calling find allele with %d, %d, %d\n", denovo, line->n_allele, ploidy);
+        find_allele_pl2(denovo, line->n_allele, ploidy, &allele_pl, &max_pl);
+        fprintf(stderr, "Child PL tags: ");
         pl_idx = 0; dnv_idx = 0; min_pl = 100000;
         while (pl[0] < pl_end[0]) {
-            int tmp_pl = (fmt_to_int(&pl[0], pl_ptr->type)) >> 8;
-//            fprintf(stderr, "%d,", tmp_pl);
+            int tmp_pl = fmt_to_int(&pl[0], pl_ptr->type);
+            fprintf(stderr, "%d,", tmp_pl);
             if (pl_idx == allele_pl[dnv_idx]) {
                 pl_idx++;
                 dnv_idx++;
@@ -269,26 +340,31 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
             min_pl = tmp_pl < min_pl? tmp_pl : min_pl;
             pl_idx++;
         }
-//        fprintf(stderr, "\n");
-        if (min_pl < prb_pl_pen) continue;
+        fprintf(stderr, "\n");
+        if (min_pl < prb_pl_pen) { 
+            fprintf(stderr, "Continue due to child min pl %d\n", min_pl); 
+            for (j = 0; j < max_pl - 1; ++j) { fprintf(stderr, "%d,", allele_pl[j]); }
+            fprintf(stderr, "\n");
+            continue; 
+        }
 
         /* Check parental PL tags */
         for (j = 1; j < 3; ++j) {
             pl_idx = 0; dnv_idx = 0; min_pl = 100000;
-//            fprintf(stderr, "Parent %d PL tags: ", j);
+            fprintf(stderr, "Parent %d PL tags: ", j);
             while (pl[j] < pl_end[j]) {
-                int tmp_pl = (fmt_to_int(&pl[j], pl_ptr->type)) >> 8;
-//                fprintf(stderr, "%d,", tmp_pl);
+                int tmp_pl = fmt_to_int(&pl[j], pl_ptr->type);
+                fprintf(stderr, "%d,", tmp_pl);
                 if (pl_idx == allele_pl[dnv_idx]) {
                     min_pl = tmp_pl < min_pl? tmp_pl : min_pl;
                     dnv_idx++;
                 }
                 pl_idx++;
             }
-//            fprintf(stderr, "\n");
-            if (min_pl < par_pl_pen) pass_filt = 0;
+            fprintf(stderr, "\n");
+            if (min_pl < par_pl_pen) { fprintf(stderr, "min_pl %d < par_pl pen %d\n", min_pl, par_pl_pen); pass_filt = 0; }
         }
-        if (!pass_filt) continue;
+        if (!pass_filt) { fprintf(stderr, "Continue due to parental min pl\n"); continue; }
 
         /* Found a de novo variant */
         if (denovo >= 0) {
@@ -388,7 +464,7 @@ int main(int argc, char *argv[])
     }
     line = bcf_init();
     while ((bcf_read(fin, hdr, line) != -1)) {
-//        fprintf(stderr, "Reading line chr%" PRId32 ":%" PRId32 "\n", line->rid, line->pos);
+        fprintf(stderr, "Reading line chr%" PRId32 ":%" PRId32 "\n", line->rid, line->pos);
 
         /* Check filter */
         bcf_unpack(line, BCF_UN_FLT);
@@ -406,20 +482,26 @@ int main(int argc, char *argv[])
         if (!found_dnv) {
             continue;
         }
-        /*
         fprintf(stderr, "Found %d de novo variants at chromsome %" PRId32 ":%" PRId32 " in samples: ", found_dnv, line->rid, line->pos);
         for (i = 0; i < n_samples; ++i) {
             if (dnv_vals[i]) fprintf(stderr, "%d,", i);
         }
         fprintf(stderr, "\n");
-        */
 
         /* Remove multi-sample variants */
+        if (max_alleles) memset(alleles, 0, sizeof(int) * (max_alleles - 1));
         if (found_dnv && max_indiv < line->n_sample) {
             count_allele_indivs(hdr, line, &alleles, &max_alleles);
+            fprintf(stderr, "Found individuals with alleles: ");
+            for (i = 0; i < max_alleles; ++i) {
+                fprintf(stderr, "%d,", alleles[i]);
+            }
+            fprintf(stderr, "\n");
+
             for (i = 0; i < n_samples; ++i) {
                 if (dnv_vals[i]) {
                     if (alleles[dnv_vals[i] - 1] > max_indiv) { 
+                        fprintf(stderr, "Removing de novo in column %d as %d alleles were found\n", i, alleles[dnv_vals[i] - 1]);
                         dnv_vals[i] = 0;
                         found_dnv--;
                     }

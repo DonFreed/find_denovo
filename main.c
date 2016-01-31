@@ -11,6 +11,28 @@
 
 KHASH_MAP_INIT_STR(ped, int)
 
+typedef struct {
+    int *offsets;
+    int n_offset;
+    kstring_t s;
+    int *stk;
+    int *allele_pl;
+    int max_allele;
+} scratch_t;
+
+inline void destroy_scratch(scratch_t *data)
+{
+    free(data->offsets);
+    free(data->s.s);
+    free(data->stk);
+    free(data->allele_pl);
+}
+
+inline scratch_t *init_scratch() {
+    scratch_t *tmp = calloc(1, sizeof(scratch_t));
+    return tmp;
+}
+
 /* 
  * Read a .ped file and return familial relationships as a map.
  */
@@ -94,10 +116,10 @@ inline void unwind_stk(int *stk, int *idx)
     return;
 }
 
-inline void find_allele_pl2(int allele, int n_allele, int ploidy, int **_allele_pl, int *_max_pl)
+inline void find_allele_pl2(int allele, int n_allele, int ploidy, int **_allele_pl, int *_max_pl, int *stk)
 {
-    int *stk, pl_pos = 0, idx = 0, i, out_idx = 0, *allele_pl = *_allele_pl, max_pl = *_max_pl;
-    stk = calloc(ploidy, sizeof(int));
+    int pl_pos = 0, idx = 0, i, out_idx = 0, *allele_pl = *_allele_pl, max_pl = *_max_pl;
+    memset(stk, 0, sizeof(int) * ploidy);
     while (stk[0] < n_allele) {
         if (stk[idx] == allele) {
             for (i = 0; i < n_pl(stk[idx] + 1, ploidy - idx - 1); ++i) {
@@ -125,7 +147,6 @@ inline void find_allele_pl2(int allele, int n_allele, int ploidy, int **_allele_
     allele_pl[out_idx] = -1;
     *_allele_pl = allele_pl;
     *_max_pl = max_pl;
-    free(stk);
     return;
 }
 
@@ -167,16 +188,23 @@ inline void count_allele_indivs(bcf_hdr_t *hdr, bcf1_t *line, int **_alleles, in
     return;
 }
 
-int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, kstring_t *fam_ids, int min_dp, int min_alt, int par_pl_pen, int prb_pl_pen)
+int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, kstring_t *fam_ids, int min_dp, int min_alt, int par_pl_pen, int prb_pl_pen, scratch_t *scratch)
 {
-    int i, j, res, n, max = 0, *offsets = 0, int_id, n_denovo = 0, ploidy, *allele_pl = 0, max_pl = 0;
+    int i, j, res, n, int_id, n_denovo = 0, ploidy;
     int pl_idx, dnv_idx, min_pl;
     uint8_t *gt[3], *gt_end[3], *ad[3], *ad_end[3], *pl[3], *pl_end[3];
     khiter_t k;
-    kstring_t s = {0, 0, 0};
     bcf_fmt_t *gt_ptr = bcf_get_fmt(hdr, line, "GT"), *ad_ptr = bcf_get_fmt(hdr, line, "AD"), *pl_ptr = bcf_get_fmt(hdr, line, "PL");
     if ((!(gt_ptr)) || (!(ad_ptr)) || (!(pl_ptr))) return 0;
     ploidy = find_ploidy(gt_ptr->size, gt_ptr->type);
+    if (!(scratch->stk)) {
+        int *tmp;
+        if ((tmp = (int*)malloc(ploidy * sizeof(int)))) {
+            scratch->stk = tmp;
+        } else {
+            return 0;
+        }
+    }
     for (i = 0; i < bcf_hdr_nsamples(hdr); ++i) {
         int last_allele = -1, allele[3] = {-1, -1, -1}, denovo = -1, depth[3] = {0, 0, 0}, pass_filt = 1;
         k = kh_get(ped, h, bcf_hdr_int2id(hdr, BCF_DT_SAMPLE, i));
@@ -193,13 +221,13 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
         pl_end[0] = pl[0] + pl_ptr->size;
 
         /* Get parental data */
-        s.l = 0;
+        scratch->s.l = 0;
         res = kh_value(h, k);
-        kputs(fam_ids->s + res, &s);
-        n = ksplit_core(s.s, '\t', &max, &offsets);
+        kputs(fam_ids->s + res, &(scratch->s));
+        n = ksplit_core(scratch->s.s, '\t', &(scratch->n_offset), &(scratch->offsets));
         assert(n == 2);
         for (j = 1; j < 3; ++j) {
-            int_id = bcf_hdr_id2int(hdr, BCF_DT_SAMPLE, s.s + offsets[j - 1]);
+            int_id = bcf_hdr_id2int(hdr, BCF_DT_SAMPLE, scratch->s.s + scratch->offsets[j - 1]);
             gt[j] = gt_ptr->p + (int_id * gt_ptr->size);
             gt_end[j] = gt[j] + gt_ptr->size;
             ad[j] = ad_ptr->p + (int_id * ad_ptr->size);
@@ -250,11 +278,11 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
         if (!pass_filt) { continue; }
 
         /* Check proband PL tags */
-        find_allele_pl2(denovo, line->n_allele, ploidy, &allele_pl, &max_pl);
+        find_allele_pl2(denovo, line->n_allele, ploidy, &(scratch->allele_pl), &(scratch->max_allele), scratch->stk);
         pl_idx = 0; dnv_idx = 0; min_pl = 100000;
         while (pl[0] < pl_end[0]) {
             int tmp_pl = fmt_to_int(&pl[0], pl_ptr->type);
-            if (pl_idx == allele_pl[dnv_idx]) {
+            if (pl_idx == scratch->allele_pl[dnv_idx]) {
                 pl_idx++;
                 dnv_idx++;
                 continue;
@@ -271,7 +299,7 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
             pl_idx = 0; dnv_idx = 0; min_pl = 100000;
             while (pl[j] < pl_end[j]) {
                 int tmp_pl = fmt_to_int(&pl[j], pl_ptr->type);
-                if (pl_idx == allele_pl[dnv_idx]) {
+                if (pl_idx == scratch->allele_pl[dnv_idx]) {
                     min_pl = tmp_pl < min_pl? tmp_pl : min_pl;
                     dnv_idx++;
                 }
@@ -287,16 +315,14 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
             dnv_vals[i] = denovo + 1; // 0 is not de novo
         }
     }
-    free(allele_pl);
-    free(s.s);
-    free(offsets);
     return n_denovo;
 }
 
 int main(int argc, char *argv[])
 {
     int c, min_dp = 20, min_alt = 3, par_pl_pen = 20, prb_pl_pen = 20, help = 0, compression = 7, i, j, *dnv_vals = 0, found_dnv, n_samples;
-    int *alleles = 0, max_alleles = 0;
+    int *alleles = 0, max_alleles = 0, n_vals = 0;
+    void *vals = 0;
     uint32_t max_indiv = 2;
     char *fnin = 0, *fnout = 0, *fndenovo = 0, *fnped = 0;
     char _out_mode = 'v', out_mode[8] = "w";
@@ -307,6 +333,7 @@ int main(int argc, char *argv[])
     FILE *fdenovo = 0;
     bcf_hdr_t *hdr;
     bcf1_t *line;
+    scratch_t *scratch;
     while ((c = getopt(argc, argv, "c:a:s:t:l:i:p:o:d:O:n:h")) >= 0) {
         if (c == 'c') min_dp = atoi(optarg);
         else if (c == 'a') min_alt = atoi(optarg);
@@ -376,6 +403,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Error: Memory allocation failure\n");
         return -1;
     }
+    scratch = init_scratch();
     line = bcf_init();
     while ((bcf_read(fin, hdr, line) != -1)) {
 
@@ -391,7 +419,7 @@ int main(int argc, char *argv[])
 
         /* Find putative de novo variants */
         memset(dnv_vals, 0, sizeof(int) * n_samples);
-        found_dnv = find_denovo(hdr, line, dnv_vals, h, &fam_ids, min_dp, min_alt, par_pl_pen, prb_pl_pen);
+        found_dnv = find_denovo(hdr, line, dnv_vals, h, &fam_ids, min_dp, min_alt, par_pl_pen, prb_pl_pen, scratch);
         if (!found_dnv) {
             continue;
         }
@@ -413,8 +441,7 @@ int main(int argc, char *argv[])
 
         /* Add de novo information to the format field */
         if (found_dnv) {
-            int first = 1, n_vals = 0, res;
-            void *vals = 0;
+            int first = 1, res;
             bcf_update_format_int32(hdr, line, "DN", dnv_vals, n_samples);
 
             /* Write summary information */
@@ -509,7 +536,6 @@ int main(int argc, char *argv[])
                 }
                 fprintf(fdenovo, "\n");
             }
-            free(vals);
         }
 
         /* Write to the output VCF */
@@ -520,12 +546,14 @@ int main(int argc, char *argv[])
     bcf_close(fout);
     bcf_destroy(line);
     bcf_hdr_destroy(hdr);
+    destroy_scratch(scratch);
     // Sub-optimal
     for (k = kh_begin(h); k != kh_end(h); ++k) {
         if (kh_exist(h, k)) {
             free((char*)kh_key(h, k));
         }
     }
+    free(vals);
     free(fam_ids.s);
     free(fnin);
     free(fnout);

@@ -458,10 +458,12 @@ int main(int argc, char *argv[])
                 for (i = 0; i < line->n_info; ++i) {
                     const char *key = hdr->id[BCF_DT_ID][line->d.info[i].key].key;
                     void *p;
-                    if (!first) fprintf(fdenovo, ";");
+                    if (i) fprintf(fdenovo, ";");
                     fprintf(fdenovo, "%s", key);
                     switch (line->d.info[i].type) {
-                        case (BCF_BT_INT8 || BCF_BT_INT16 || BCF_BT_INT32):
+                        case BCF_BT_INT8:
+                        case BCF_BT_INT16:
+                        case BCF_BT_INT32:
                             res = bcf_get_info_values(hdr, line, key, &vals, &n_vals, BCF_HT_INT);
                             p = vals;
                             for (j = 0; j < res; ++j) {
@@ -494,6 +496,9 @@ int main(int argc, char *argv[])
                             fprintf(fdenovo, "%s", ((char *)vals));
                             break;
                         default:
+                            if (!(strcmp(key, "DP"))) {
+                                fprintf(stderr, "here4\n");
+                            }
                             break;
                     }
                     first = 0;

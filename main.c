@@ -12,9 +12,13 @@
 KHASH_MAP_INIT_STR(ped, int)
 
 typedef struct {
-    int *offsets;
-    int n_offset;
-    kstring_t s;
+    int fa_id;
+    int mo_id;
+} parent_t;
+
+KHASH_MAP_INIT_INT(ped2, parent_t)
+
+typedef struct {
     int *stk;
     int *allele_pl;
     int max_allele;
@@ -22,10 +26,9 @@ typedef struct {
 
 inline void destroy_scratch(scratch_t *data)
 {
-    free(data->offsets);
-    free(data->s.s);
     free(data->stk);
     free(data->allele_pl);
+    free(data);
 }
 
 inline scratch_t *init_scratch() {
@@ -56,12 +59,47 @@ khash_t(ped) *read_ped_file(const char *fnped, kstring_t *fam_ids)
             line.s[offsets[3] - 1] = '\t';
             idx = fam_ids->l;
             res = kputsn(line.s + offsets[2], offsets[4] - offsets[2], fam_ids);
-            k = kh_put(ped, h, strdup(line.s + offsets[1]), &ret); // FIXME: strdup is less efficent than the allocation of a memory block
+            k = kh_put(ped, h, strdup(line.s + offsets[1]), &ret);
             kh_value(h, k) = idx;
         }
         line.l = 0;
     }
 
+    free(line.s);
+    free(offsets);
+    return h;
+}
+
+khash_t(ped2) *read_ped_file2(const char *fnped, bcf_hdr_t *hdr)
+{
+    int res, ln = 0, *offsets = 0, max = 0, n, ret = 0;
+    FILE *fp;
+    kstring_t line = {0, 0, 0};
+    khash_t(ped2) *h = kh_init(ped2);
+    khiter_t k;
+
+    fp = fopen(fnped, "r");
+    while ((res = kgetline(&line, (kgets_func *)fgets, fp)) != EOF) {
+        ++ln;
+        n = ksplit_core(line.s, '\t', &max, &offsets);
+        if (n != 6) {
+            fprintf(stderr, "Error: ped file is poorly formated at line %d. Incorrect number of columns\n", ln);
+            return 0;
+        }
+        if (line.s[offsets[2]] != '0') {
+            parent_t tmp;
+            int child_col = bcf_hdr_id2int(hdr, BCF_DT_SAMPLE, line.s + offsets[1]);
+            tmp.fa_id = bcf_hdr_id2int(hdr, BCF_DT_SAMPLE, line.s + offsets[2]);
+            tmp.mo_id = bcf_hdr_id2int(hdr, BCF_DT_SAMPLE, line.s + offsets[3]);
+            if (child_col >= 0 && tmp.fa_id >= 0 && tmp.mo_id >= 0) {
+                k = kh_put(ped2, h, (khint32_t)child_col, &ret);
+                kh_value(h, k) = tmp;
+            } else {
+                fprintf(stderr, "Warning: trio %s, %s, %s found in .ped file but not found in vcf header\n", line.s + offsets[1], line.s + offsets[2], line.s + offsets[3]);
+            }
+        }
+        line.l = 0;
+    }
     free(line.s);
     free(offsets);
     return h;
@@ -188,12 +226,13 @@ inline void count_allele_indivs(bcf_hdr_t *hdr, bcf1_t *line, int **_alleles, in
     return;
 }
 
-int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, kstring_t *fam_ids, int min_dp, int min_alt, int par_pl_pen, int prb_pl_pen, scratch_t *scratch)
+int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped2) *h, int min_dp, int min_alt, int par_pl_pen, int prb_pl_pen, scratch_t *scratch)
 {
-    int i, j, res, n, int_id, n_denovo = 0, ploidy;
+    int i, j, n_denovo = 0, ploidy;
     int pl_idx, dnv_idx, min_pl;
     uint8_t *gt[3], *gt_end[3], *ad[3], *ad_end[3], *pl[3], *pl_end[3];
     khiter_t k;
+    parent_t parents;
     bcf_fmt_t *gt_ptr = bcf_get_fmt(hdr, line, "GT"), *ad_ptr = bcf_get_fmt(hdr, line, "AD"), *pl_ptr = bcf_get_fmt(hdr, line, "PL");
     if ((!(gt_ptr)) || (!(ad_ptr)) || (!(pl_ptr))) return 0;
     ploidy = find_ploidy(gt_ptr->size, gt_ptr->type);
@@ -207,7 +246,7 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
     }
     for (i = 0; i < bcf_hdr_nsamples(hdr); ++i) {
         int last_allele = -1, allele[3] = {-1, -1, -1}, denovo = -1, depth[3] = {0, 0, 0}, pass_filt = 1;
-        k = kh_get(ped, h, bcf_hdr_int2id(hdr, BCF_DT_SAMPLE, i));
+        k = kh_get(ped2, h, i);
         if ((k == kh_end(h))) {
             continue;
         }
@@ -220,21 +259,23 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped) *h, ks
         pl[0] = pl_ptr->p + (i * pl_ptr->size);
         pl_end[0] = pl[0] + pl_ptr->size;
 
-        /* Get parental data */
-        scratch->s.l = 0;
-        res = kh_value(h, k);
-        kputs(fam_ids->s + res, &(scratch->s));
-        n = ksplit_core(scratch->s.s, '\t', &(scratch->n_offset), &(scratch->offsets));
-        assert(n == 2);
-        for (j = 1; j < 3; ++j) {
-            int_id = bcf_hdr_id2int(hdr, BCF_DT_SAMPLE, scratch->s.s + scratch->offsets[j - 1]);
-            gt[j] = gt_ptr->p + (int_id * gt_ptr->size);
-            gt_end[j] = gt[j] + gt_ptr->size;
-            ad[j] = ad_ptr->p + (int_id * ad_ptr->size);
-            ad_end[j] = ad[j] + ad_ptr->size;
-            pl[j] = pl_ptr->p + (int_id * pl_ptr->size);
-            pl_end[j] = pl[j] + pl_ptr->size;
-        }
+        /* Get father data */
+        parents = kh_value(h, k);
+        gt[1] = gt_ptr->p + (parents.fa_id * gt_ptr->size);
+        gt_end[1] = gt[1] + gt_ptr->size;
+        ad[1] = ad_ptr->p + (parents.fa_id * ad_ptr->size);
+        ad_end[1] = ad[1] + ad_ptr->size;
+        pl[1] = pl_ptr->p + (parents.fa_id * pl_ptr->size);
+        pl_end[1] = pl[1] + pl_ptr->size;
+        
+        /* Get mother data */
+        gt[2] = gt_ptr->p + (parents.mo_id * gt_ptr->size);
+        gt_end[2] = gt[2] + gt_ptr->size;
+        ad[2] = ad_ptr->p + (parents.mo_id * ad_ptr->size);
+        ad_end[2] = ad[2] + ad_ptr->size;
+        pl[2] = pl_ptr->p + (parents.mo_id * pl_ptr->size);
+        pl_end[2] = pl[2] + pl_ptr->size;
+
 
         /* Check genotypes */
         while (gt[0] < gt_end[0]) {
@@ -326,8 +367,9 @@ int main(int argc, char *argv[])
     uint32_t max_indiv = 2;
     char *fnin = 0, *fnout = 0, *fndenovo = 0, *fnped = 0;
     char _out_mode = 'v', out_mode[8] = "w";
-    kstring_t fam_ids = {0, 0, 0}, alt_out = {0, 0, 0};
-    khash_t(ped) *h;
+    kstring_t alt_out = {0, 0, 0};
+    //khash_t(ped) *h;
+    khash_t(ped2) *h;
     khiter_t k;
     htsFile *fin, *fout;
     FILE *fdenovo = 0;
@@ -383,8 +425,6 @@ int main(int argc, char *argv[])
     if (compression < 0) compression = 0;
     if (compression > 9) compression = 9;
     
-    if (!(h = read_ped_file(fnped, &fam_ids))) return -1;
-
     fin = bcf_open(fnin, "r");
     out_mode[1] = _out_mode;
     sprintf(out_mode + 2, "%d", compression);
@@ -393,6 +433,9 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Error: Could not read header from %s\n", fnin);
         return -1;
     }
+
+    if (!(h = read_ped_file2(fnped, hdr))) return -1;
+
     bcf_hdr_append(hdr, "##FORMAT=<ID=DN,Number=1,Type=Integer,Description=\"Allele + 1 is de novo in sample, otherwise 0\">");
     if ((bcf_hdr_write(fout, hdr))) {
         fprintf(stderr, "Error: Could not write to file %s\n", fnout);
@@ -419,7 +462,7 @@ int main(int argc, char *argv[])
 
         /* Find putative de novo variants */
         memset(dnv_vals, 0, sizeof(int) * n_samples);
-        found_dnv = find_denovo(hdr, line, dnv_vals, h, &fam_ids, min_dp, min_alt, par_pl_pen, prb_pl_pen, scratch);
+        found_dnv = find_denovo(hdr, line, dnv_vals, h, min_dp, min_alt, par_pl_pen, prb_pl_pen, scratch);
         if (!found_dnv) {
             continue;
         }
@@ -496,9 +539,6 @@ int main(int argc, char *argv[])
                             fprintf(fdenovo, "%s", ((char *)vals));
                             break;
                         default:
-                            if (!(strcmp(key, "DP"))) {
-                                fprintf(stderr, "here4\n");
-                            }
                             break;
                     }
                     first = 0;
@@ -552,14 +592,7 @@ int main(int argc, char *argv[])
     bcf_destroy(line);
     bcf_hdr_destroy(hdr);
     destroy_scratch(scratch);
-    // Sub-optimal
-    for (k = kh_begin(h); k != kh_end(h); ++k) {
-        if (kh_exist(h, k)) {
-            free((char*)kh_key(h, k));
-        }
-    }
     free(vals);
-    free(fam_ids.s);
     free(fnin);
     free(fnout);
     free(fndenovo);
@@ -567,6 +600,6 @@ int main(int argc, char *argv[])
     free(alt_out.s);
     free(alleles);
     free(dnv_vals);
-    kh_destroy(ped, h);
+    kh_destroy(ped2, h);
     return 0;
 }

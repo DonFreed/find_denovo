@@ -362,13 +362,12 @@ int find_denovo(bcf_hdr_t *hdr, bcf1_t *line, int *dnv_vals, khash_t(ped2) *h, i
 int main(int argc, char *argv[])
 {
     int c, min_dp = 20, min_alt = 3, par_pl_pen = 20, prb_pl_pen = 20, help = 0, compression = 7, i, j, *dnv_vals = 0, found_dnv, n_samples;
-    int *alleles = 0, max_alleles = 0, n_vals = 0;
+    int *alleles = 0, max_alleles = 0, n_vals = 0, n_threads = 0;
     void *vals = 0;
     uint32_t max_indiv = 2;
     char *fnin = 0, *fnout = 0, *fndenovo = 0, *fnped = 0;
     char _out_mode = 'v', out_mode[8] = "w";
     kstring_t alt_out = {0, 0, 0};
-    //khash_t(ped) *h;
     khash_t(ped2) *h;
     khiter_t k;
     htsFile *fin, *fout;
@@ -376,7 +375,7 @@ int main(int argc, char *argv[])
     bcf_hdr_t *hdr;
     bcf1_t *line;
     scratch_t *scratch;
-    while ((c = getopt(argc, argv, "c:a:s:t:l:i:p:o:d:O:n:h")) >= 0) {
+    while ((c = getopt(argc, argv, "c:a:s:t:l:i:p:o:d:O:n:x:h")) >= 0) {
         if (c == 'c') min_dp = atoi(optarg);
         else if (c == 'a') min_alt = atoi(optarg);
         else if (c == 's') prb_pl_pen = atoi(optarg);
@@ -388,6 +387,7 @@ int main(int argc, char *argv[])
         else if (c == 'd') fndenovo = strdup(optarg);
         else if (c == 'O') _out_mode = optarg[0];
         else if (c == 'n') max_indiv = atoi(optarg);
+        else if (c == 'x') n_threads = atoi(optarg);
         else if (c == 'h') help = 1;
         else break;
     }
@@ -408,6 +408,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "           -d FILE         Output abbreviated information on the identified de novo variants (recommended for large inputs)\n");
         fprintf(stderr, "           -O <v|z|b|u>    v: VCF, z: bgzip compressed VCF, b: BCF, u: uncompressed BCF [v]\n");
         fprintf(stderr, "           -n INT          The maximum number of non-sibling individuals with the allele for a de novo call [%d]\n", max_indiv);
+        fprintf(stderr, "           -x INT          number of extra compression/decompression threads [%d]\n", n_threads);
         fprintf(stderr, "           -h              Print this help information\n");
         fprintf(stderr, "\n");
         return -1;
@@ -426,9 +427,11 @@ int main(int argc, char *argv[])
     if (compression > 9) compression = 9;
     
     fin = bcf_open(fnin, "r");
+    if (n_threads) { hts_set_threads(fin, n_threads); }
     out_mode[1] = _out_mode;
     sprintf(out_mode + 2, "%d", compression);
     fout = bcf_open(fnout, out_mode);
+    if (n_threads) { hts_set_threads(fout, n_threads); }
     if (!(hdr = bcf_hdr_read(fin))) {
         fprintf(stderr, "Error: Could not read header from %s\n", fnin);
         return -1;

@@ -417,7 +417,6 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Error: Please specify a .ped file with the -p option\n");
         return -1;
     }
-    if (!fnin) fnin = "-";
     if (!fnout) fnout = "-";
     if (!(_out_mode == 'v' || _out_mode == 'b' || _out_mode == 'z' || _out_mode == 'u')) {
         fprintf(stderr, "Error: Output file mode must be v, b, z, or u\n");
@@ -426,11 +425,19 @@ int main(int argc, char *argv[])
     if (compression < 0) compression = 0;
     if (compression > 9) compression = 9;
     
-    fin = bcf_open(fnin, "r");
+    if (fnin) {
+        fin = bcf_open(fnin, "r");
+    } else { 
+        fin = bcf_open("-", "r");
+    }
     if (n_threads) { hts_set_threads(fin, n_threads); }
     out_mode[1] = _out_mode;
     sprintf(out_mode + 2, "%d", compression);
-    fout = bcf_open(fnout, out_mode);
+    if (fnout) {
+        fout = bcf_open(fnout, out_mode);
+    } else {
+        fout = bcf_open("-", out_mode);
+    }
     if (n_threads) { hts_set_threads(fout, n_threads); }
     if (!(hdr = bcf_hdr_read(fin))) {
         fprintf(stderr, "Error: Could not read header from %s\n", fnin);

@@ -10,6 +10,7 @@ make HTSDIR=/path/to/htslib/
 ```
 
 ### Usage
+```
 mark_denovo [options] [-O <v|z|b|u>] [-i <in.vcf|in.vcf.gz|in.bcf>] -p in.ped [-o <out.vcf|out.vcf.gz|out.bcf>]
 
 Options:
@@ -26,3 +27,4 @@ Options:
            -n INT          The maximum number of non-sibling individuals with the allele for a de novo call [2]
            -x INT          number of extra compression/decompression threads [0]
            -h              Print this help information
+```

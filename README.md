@@ -4,7 +4,10 @@ find_denovo
 A simple tool for identifying *de novo* variants from a VCF/BCF file.
 
 ### Installation
-`make HTSDIR=/path/to/htslib/`
+```
+git clone git://github.com/DonFreed/find_denovo.git
+make HTSDIR=/path/to/htslib/
+```
 
 ### Usage
 mark_denovo [options] [-O <v|z|b|u>] [-i <in.vcf|in.vcf.gz|in.bcf>] -p in.ped [-o <out.vcf|out.vcf.gz|out.bcf>]

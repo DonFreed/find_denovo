@@ -474,6 +474,7 @@ int main(int argc, char *argv[])
         memset(dnv_vals, 0, sizeof(int) * n_samples);
         found_dnv = find_denovo(hdr, line, dnv_vals, h, min_dp, min_alt, par_pl_pen, prb_pl_pen, scratch);
         if (!found_dnv) {
+            bcf_write(fout, hdr, line);
             continue;
         }
 

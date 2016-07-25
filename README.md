@@ -11,7 +11,7 @@ make HTSDIR=/path/to/htslib/
 
 ### Usage
 ```
-mark_denovo [options] [-O <v|z|b|u>] [-i <in.vcf|in.vcf.gz|in.bcf>] -p in.ped [-o <out.vcf|out.vcf.gz|out.bcf>]
+find_denovo [options] [-O <v|z|b|u>] [-i <in.vcf|in.vcf.gz|in.bcf>] -p in.ped [-o <out.vcf|out.vcf.gz|out.bcf>]
 
 Options:
            -c INT          Minimum number of reads in all trio members [20]
@@ -28,3 +28,6 @@ Options:
            -x INT          number of extra compression/decompression threads [0]
            -h              Print this help information
 ```
+
+### Notes
+`find_denovo` should work well for all samples regardless of ploidy. For diploid samples, the GATK's [Genotype Refinement Pipeline](https://software.broadinstitute.org/gatk/documentation/article?id=4723) may be more accurate.

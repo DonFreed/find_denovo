@@ -6,6 +6,7 @@ A simple tool for identifying *de novo* variants from a VCF/BCF file.
 ### Installation
 ```
 git clone git://github.com/DonFreed/find_denovo.git
+cd find_denovo
 make HTSDIR=/path/to/htslib/
 ```
 
